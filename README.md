@@ -121,6 +121,10 @@ Designed for:
 ```
 .azarbug <groupname/link>
 ```
+### 🐞 Anti-Bug Command
+```
+.antispam delete/kick/warn on 
+```
 
 ### 🛡 Security Systems
 - Anti-Link  
