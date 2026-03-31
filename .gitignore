@@ -71,7 +71,7 @@ baileys_store.json
 tmp*/
 tmp_update/
 temp/
-data/
+
 
 # Replit / runtime specific
 .local/
