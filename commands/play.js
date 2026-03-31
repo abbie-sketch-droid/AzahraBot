@@ -1,21 +1,67 @@
 // ==============================================
-// 🎵 Azahrabot Play Command (v5.7 — Spotify API + elite-protech)
-// Song name → Spotify track → MP3 download
+// 🎵 Azahrabot Play Command (v8 — Uses ytmp3 engine)
+// Spotify + YouTube + ElitePro + robust downloader
 // ==============================================
 
+const fs = require("fs");
+const path = require("path");
 const axios = require("axios");
+const yts = require("yt-search");
+const { fileTypeFromBuffer } = require("file-type");
+const ffmpeg = require("fluent-ffmpeg");
+const ffmpegInstaller = require("@ffmpeg-installer/ffmpeg");
 const small = require("../lib/small_lib");
 
-// Helper: get Spotify access token
-async function getSpotifyToken() {
-  const clientId = small.api?.spotifyClientId;
-  const clientSecret = small.api?.spotifyClientSecret;
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-  if (!clientId || !clientSecret) {
-    throw new Error("Spotify API credentials missing in small_lib.js");
+// 📁 Temp dir
+function ensureTempDir() {
+  const dir = path.join(__dirname, "../temp");
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// 🔄 SAME DOWNLOAD ENGINE (from your ytmp3)
+async function downloadFile(url, destPath) {
+  const strategies = [
+    {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      "Referer": "https://eliteprotech-apis.zone.id/",
+    },
+    {
+      "User-Agent": "Mozilla/5.0 (Android 13)",
+    },
+    null,
+  ];
+
+  for (let i = 0; i < strategies.length; i++) {
+    try {
+      const res = await axios({
+        url,
+        method: "GET",
+        responseType: "arraybuffer",
+        headers: strategies[i] || {},
+        timeout: 60000,
+      });
+
+      const buffer = Buffer.from(res.data);
+
+      if (buffer.length < 5000) continue;
+
+      fs.writeFileSync(destPath, buffer);
+      return buffer;
+
+    } catch {}
   }
 
-  const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  throw new Error("Download failed");
+}
+
+// 🔐 Spotify Token
+async function getSpotifyToken() {
+  const auth = Buffer.from(
+    `${small.api.spotifyClientId}:${small.api.spotifyClientSecret}`
+  ).toString("base64");
 
   const res = await axios.post(
     "https://accounts.spotify.com/api/token",
@@ -31,171 +77,126 @@ async function getSpotifyToken() {
   return res.data.access_token;
 }
 
-// Step 1: Search Spotify Track
+// 🎧 Spotify Search
 async function searchSpotifyTrack(query) {
-
   const token = await getSpotifyToken();
 
-  const searchRes = await axios.get(
-    "https://api.spotify.com/v1/search",
-    {
-      params: {
-        q: query,
-        type: "track",
-        limit: 1,
-      },
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    }
-  );
+  const res = await axios.get("https://api.spotify.com/v1/search", {
+    params: { q: query, type: "track", limit: 5 },
+    headers: { Authorization: `Bearer ${token}` },
+  });
 
-  const track = searchRes.data?.tracks?.items?.[0];
+  const tracks = res.data.tracks.items;
 
-  if (!track) throw new Error("No track found");
+  const track =
+    tracks.find(t => t.name.toLowerCase().includes(query.toLowerCase())) ||
+    tracks[0];
 
   return {
-    url: track.external_urls.spotify,
     title: track.name,
     artist: track.artists.map(a => a.name).join(", "),
     duration: msToTime(track.duration_ms),
-    cover: track.album.images[0]?.url,
+    cover: track.album.images[0].url,
   };
 }
 
-// Step 2: Fetch download link
-async function fetchDownloadFromApi(spotifyUrl) {
-
-  const apiUrl =
-    `https://eliteprotech-apis.zone.id/spotify?url=${encodeURIComponent(spotifyUrl)}`;
-
-  const res = await axios.get(apiUrl, {
-    timeout: 60000,
-  });
-
-  if (!res.data?.success || !res.data?.data?.download) {
-    throw new Error("API did not return a download link");
-  }
-
-  return {
-    downloadUrl: res.data.data.download,
-    metadata: res.data.data.metadata,
-  };
+// 🎬 YouTube
+async function getYouTube(query) {
+  const res = await yts(query);
+  return res.videos.find(v => v.seconds > 30);
 }
 
-// Convert ms → mm:ss
+// ⏱ Time
 function msToTime(ms) {
-
-  const minutes = Math.floor(ms / 60000);
-
-  const seconds = ((ms % 60000) / 1000)
-    .toFixed(0)
-    .padStart(2, "0");
-
-  return `${minutes}:${seconds}`;
+  const m = Math.floor(ms / 60000);
+  const s = ((ms % 60000) / 1000).toFixed(0).padStart(2, "0");
+  return `${m}:${s}`;
 }
 
+// 🚀 MAIN
 module.exports = async (sock, msg, from, text, args) => {
-
-  const query = args.join(" ").trim();
-
-  if (!query) {
-    return sock.sendMessage(
-      from,
-      { text: "🎧 *Usage:* .play <song name>" },
-      { quoted: msg }
-    );
-  }
-
   try {
+    const query = args.join(" ");
+    if (!query) {
+      return sock.sendMessage(from, { text: "Usage: .play <song>" }, { quoted: msg });
+    }
 
-    await sock.sendMessage(from, {
-      react: { text: "🎶", key: msg.key },
-    });
+    await sock.sendMessage(from, { react: { text: "🎶", key: msg.key } });
 
-    await sock.sendMessage(
-      from,
-      { text: `🔍 *Searching for "${query}"...*` },
-      { quoted: msg }
-    );
-
-    // ✅ Spotify Search (kept)
-    const trackInfo = await searchSpotifyTrack(query);
-
-    // ❌ Removed "Found Getting Download Link" message ONLY
-
-    // ✅ Fetch Download
-    const { downloadUrl, metadata } =
-      await fetchDownloadFromApi(trackInfo.url);
-
-    const title = metadata?.title || trackInfo.title;
-    const artist = metadata?.artist || trackInfo.artist;
-    const duration = metadata?.duration || trackInfo.duration;
-    const cover = metadata?.images || trackInfo.cover;
-
+    const track = await searchSpotifyTrack(query);
+    const yt = await getYouTube(`${track.title} ${track.artist} official audio`);
+    
     const caption = `
-🎧 *${title}*
-────────────────────
-🎤 *Artist:* ${artist}
-⏱ *Duration:* ${duration}
-────────────────────
-> 🎶 *Powered by ${small.author || "AzarTech"}* ⚡
-`.trim();
+    🎧 *${track.title}*
+    ────────────────────
+    🎤 *Artist:* ${track.artist}
+    ⏱ *Duration:* ${track.duration}
+    ────────────────────
+    > 🎶 *Powered by ${small.author || "AzarTech"}* ⚡
+    `.trim();
 
-    // Banner
     await sock.sendMessage(
       from,
       {
         text: caption + "\n\n⬇️ *Downloading your song...*",
         contextInfo: {
           externalAdReply: {
-            title,
-            body: `${artist} • ${duration}`,
+            title: track.title,
+            body: `${track.artist} • ${track.duration}`,
             mediaType: 1,
             renderLargerThumbnail: true,
-            thumbnailUrl: cover,
-            sourceUrl: trackInfo.url,
+            thumbnailUrl: track.cover,
+            sourceUrl: yt.url,
           },
         },
       },
       { quoted: msg }
     );
 
-    // Send MP3
+    const apiUrl = `https://eliteprotech-apis.zone.id/ytdown?url=${encodeURIComponent(yt.url)}&format=mp3`;
+
+    const apiRes = await axios.get(apiUrl);
+    const downloadUrl = apiRes.data.downloadURL;
+
+    const tempDir = ensureTempDir();
+    const rawPath = path.join(tempDir, `play_${Date.now()}.bin`);
+
+    const buffer = await downloadFile(downloadUrl, rawPath);
+
+    const type = await fileTypeFromBuffer(buffer);
+
+    let finalPath = rawPath;
+
+    // 🎬 Convert if needed
+    if (type && type.mime.startsWith("video")) {
+      const mp3Path = rawPath + ".mp3";
+
+      await new Promise((res, rej) => {
+        ffmpeg(rawPath).toFormat("mp3").on("end", res).on("error", rej).save(mp3Path);
+      });
+
+      fs.unlinkSync(rawPath);
+      finalPath = mp3Path;
+    }
+
+    const audio = fs.readFileSync(finalPath);
+
     await sock.sendMessage(
       from,
       {
-        audio: { url: downloadUrl },
+        audio,
         mimetype: "audio/mpeg",
-        fileName: `${title}.mp3`,
+        fileName: `${track.title}.mp3`,
       },
       { quoted: msg }
     );
 
-    await sock.sendMessage(from, {
-      react: { text: "✅", key: msg.key },
-    });
+    fs.unlinkSync(finalPath);
 
-  } catch (err) {
+    await sock.sendMessage(from, { react: { text: "✅", key: msg.key } });
 
-    console.error("❌ .play error:", err.message);
-
-    let errorMsg = "⚠️ Failed to process song.\n";
-
-    if (err.message.includes("credentials")) {
-      errorMsg += "Please set Spotify API credentials.";
-    } else if (err.message.includes("No track found")) {
-      errorMsg += "No song found with that name.";
-    } else if (err.message.includes("API did not return")) {
-      errorMsg += "Download service unavailable.";
-    } else {
-      errorMsg += "Try again later.";
-    }
-
-    await sock.sendMessage(
-      from,
-      { text: errorMsg },
-      { quoted: msg }
-    );
+  } catch (e) {
+    console.error(e);
+    await sock.sendMessage(from, { text: "❌ Failed to fetch song" }, { quoted: msg });
   }
 };
