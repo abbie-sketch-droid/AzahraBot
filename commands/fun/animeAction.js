@@ -1,5 +1,5 @@
 // ==============================================
-// 💖 Anime Action System (Multi Command)
+// 💖 Anime Action System (FINAL STABLE)
 // Azahrabot
 // ==============================================
 
@@ -7,21 +7,7 @@ const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 const { exec } = require("child_process");
-
-const SUPPORTED = [
-  "poke",
-  "cry",
-  "kiss",
-  "pat",
-  "hug",
-  "wink",
-  "facepalm",
-  "slap",
-  "cuddle",
-  "bite",
-  "lick",
-  "nom"
-];
+const ffmpegPath = require("ffmpeg-static");
 
 function getTarget(msg) {
   return (
@@ -30,16 +16,19 @@ function getTarget(msg) {
   );
 }
 
-module.exports = async (sock, msg, from, text) => {
+module.exports = async (sock, msg, from, text, command) => {
   try {
-    const command = text.split(" ")[0].replace(".", "").toLowerCase();
-    if (!SUPPORTED.includes(command)) return;
+    // ❗ Safety check (fixes your 404 bug)
+    if (!command) {
+      console.log("❌ Missing command in animeAction");
+      return;
+    }
+
+    console.log("Anime Command:", command);
 
     const target = getTarget(msg);
     const sender = msg.key.participant || msg.key.remoteJid;
-    const senderTag = sender.split("@")[0];
 
-    // Emoji reactions
     const EMOJI = {
       poke: "👉",
       cry: "😭",
@@ -55,12 +44,21 @@ module.exports = async (sock, msg, from, text) => {
       nom: "🍪"
     };
 
+    // ✅ FIXED reaction (correct message always)
     await sock.sendMessage(from, {
-      react: { text: EMOJI[command] || "💖", key: msg.key }
-    }).catch(() => {});
+      react: {
+        text: EMOJI[command] || "💖",
+        key: {
+          remoteJid: msg.key.remoteJid,
+          fromMe: msg.key.fromMe,
+          id: msg.key.id
+        }
+      }
+    }).catch(() => { });
 
-    // API call
+    // 🔥 API call
     const res = await axios.get(`https://api.waifu.pics/sfw/${command}`);
+
     if (!res.data?.url) {
       return sock.sendMessage(from, {
         text: "❌ Couldn't fetch anime action."
@@ -69,8 +67,10 @@ module.exports = async (sock, msg, from, text) => {
 
     const gifUrl = res.data.url;
 
-    const gifPath = path.join(__dirname, "anime.gif");
-    const webpPath = path.join(__dirname, "anime.webp");
+    // ✅ unique file fix (no overwrite bug)
+    const id = Date.now();
+    const gifPath = path.join(__dirname, `anime_${id}.gif`);
+    const webpPath = path.join(__dirname, `anime_${id}.webp`);
 
     const buffer = (await axios.get(gifUrl, {
       responseType: "arraybuffer"
@@ -78,14 +78,11 @@ module.exports = async (sock, msg, from, text) => {
 
     fs.writeFileSync(gifPath, buffer);
 
-    // Convert to full-fit animated sticker
+    // 🎬 convert to sticker
     await new Promise((resolve, reject) => {
       exec(
-        `ffmpeg -i ${gifPath} -vf "fps=15,scale=512:512:force_original_aspect_ratio=increase,crop=512:512" -loop 0 -an -vsync 0 -vcodec libwebp ${webpPath}`,
-        (err) => {
-          if (err) reject(err);
-          else resolve();
-        }
+        `"${ffmpegPath}" -i "${gifPath}" -vf "fps=15,scale=512:512:force_original_aspect_ratio=increase,crop=512:512" -loop 0 -an -vsync 0 -vcodec libwebp "${webpPath}"`,
+        (err) => (err ? reject(err) : resolve())
       );
     });
 
@@ -102,6 +99,10 @@ module.exports = async (sock, msg, from, text) => {
     fs.unlinkSync(webpPath);
 
   } catch (err) {
-    console.error("Anime action error:", err.message);
+    console.error("Anime FULL ERROR:", err);
+
+    await sock.sendMessage(from, {
+      text: "❌ Anime sticker failed: " + err.message
+    }, { quoted: msg });
   }
 };

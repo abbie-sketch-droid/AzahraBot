@@ -31,6 +31,9 @@ function loadConfig() {
 
 function saveConfig(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  if (typeof global.refreshAutoConfig === 'function') {
+    global.refreshAutoConfig();
+  }
 }
 
 // OWNER CHECK (fromMe safest)
@@ -52,7 +55,9 @@ module.exports = async function automationController(sock, msg, from, text, args
     }, { quoted: msg });
   }
 
-  const command = text.split(" ")[0].replace(".", "").toLowerCase();
+  const prefix = typeof global.getPrefix === 'function' ? global.getPrefix() : (settings.prefix || ".");
+  const withoutPrefix = text.slice(prefix.length).trim();
+  const command = withoutPrefix.split(/\s+/)[0].toLowerCase();
   const config = loadConfig();
   const state = args[0]?.toLowerCase();
 

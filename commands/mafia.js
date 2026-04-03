@@ -176,116 +176,87 @@ return sock.sendMessage(from,{text:r.msg},{quoted:msg});
 
 
 // ================= GAME LOOP =================
-async function gameLoop(sock,gid){
+async function gameLoop(sock,gid) {
+  const g = m.games[gid];
+  if(!g) return;
 
-const g = m.games[gid];
-if(!g) return;
+  const safeExecute = async (fn) => {
+    try {
+      if(!m.games[gid]) return; // Stop if game ended externally
+      await fn();
+    } catch (err) {
+      console.log("Mafia game tick error:", err);
+    }
+  };
 
-// ===== NIGHT TIMER =====
-setTimeout(async()=>{
+  // ===== NIGHT TIMER =====
+  setTimeout(() => safeExecute(async () => {
+    const deaths = m.resolveNight(g);
 
-const deaths = m.resolveNight(g);
+    if(!deaths.length) {
+      await sock.sendMessage(gid,{
+        text:"🌙 No one was killed tonight\n\n☀️ Discussion Time"
+      });
+    } else {
+      let text = "💀 *Night Result*\n\n";
+      let mentions = [];
+      for(const d of deaths) {
+        let role = "CIVILIAN";
+        if(d.role==="mafia") role="MAFIA";
+        if(d.role==="doctor") role="DOCTOR";
+        text += `☠️ @${d.jid.split("@")[0]} got killed — (${role})\n`;
+        mentions.push(d.jid);
+      }
+      text += "\n☀️ Discussion Time";
+      await sock.sendMessage(gid,{ text, mentions });
+    }
 
-if(!deaths.length){
+    // ===== DISCUSSION TIMER =====
+    setTimeout(() => safeExecute(async () => {
+      g.phase="vote";
+      await sock.sendMessage(gid,{
+        text:"🗳️ Voting started! Use *.mafia vote <num>*"
+      });
 
-await sock.sendMessage(gid,{
-text:"🌙 No one was killed tonight\n\n☀️ Discussion Time"
-});
+      // ===== VOTE TIMER =====
+      setTimeout(() => safeExecute(async () => {
+        const v = m.resolveVote(g);
+        if(v.tie) {
+          await sock.sendMessage(gid,{
+            text:"⚖️ Voting Tie — Nobody Eliminated"
+          });
+        } else {
+          let role="CIVILIAN";
+          let icon="👤";
+          if(v.role==="mafia"){role="MAFIA"; icon="🔪";}
+          if(v.role==="doctor"){role="DOCTOR"; icon="💉";}
+          await sock.sendMessage(gid,{
+            text:`🚫 @${v.jid.split("@")[0]} Eliminated — ${icon} ${role}`,
+            mentions:[v.jid]
+          });
+        }
 
-}else{
+        // ===== WIN CHECK =====
+        const win = m.win(g);
+        if(win) {
+          await sock.sendMessage(gid,{ text:`🏆 *${win} WIN!*` });
+          const reveal = m.reveal(g);
+          await sock.sendMessage(gid,{
+            text: reveal.text,
+            mentions: reveal.mentions
+          });
+          m.endGame(gid);
+          return;
+        }
 
-let text = "💀 *Night Result*\n\n";
-let mentions = [];
+        // ===== NEXT NIGHT =====
+        g.phase="night";
+        await sock.sendMessage(gid,{ text:"🌙 Next Night Begins..." });
+        
+        // Loop recursively safely
+        gameLoop(sock,gid);
 
-for(const d of deaths){
-
-let role = "CIVILIAN";
-if(d.role==="mafia") role="MAFIA";
-if(d.role==="doctor") role="DOCTOR";
-
-text += `☠️ @${d.jid.split("@")[0]} got killed — (${role})\n`;
-mentions.push(d.jid);
-
-}
-
-text += "\n☀️ Discussion Time";
-
-await sock.sendMessage(gid,{
-text,
-mentions
-});
-
-}
-
-// ===== DISCUSSION TIMER =====
-setTimeout(async()=>{
-
-g.phase="vote";
-
-await sock.sendMessage(gid,{
-text:"🗳️ Voting started! Use *.mafia vote <num>*"
-});
-
-// ===== VOTE TIMER =====
-setTimeout(async()=>{
-
-const v = m.resolveVote(g);
-
-if(v.tie){
-
-await sock.sendMessage(gid,{
-text:"⚖️ Voting Tie — Nobody Eliminated"
-});
-
-}else{
-
-let role="CIVILIAN";
-let icon="👤";
-
-if(v.role==="mafia"){role="MAFIA"; icon="🔪";}
-if(v.role==="doctor"){role="DOCTOR"; icon="💉";}
-
-await sock.sendMessage(gid,{
-text:`🚫 @${v.jid.split("@")[0]} Eliminated — ${icon} ${role}`,
-mentions:[v.jid]
-});
-
-}
-
-// ===== WIN CHECK =====
-const win = m.win(g);
-
-if(win){
-
-await sock.sendMessage(gid,{
-text:`🏆 *${win} WIN!*`
-});
-
-const reveal = m.reveal(g);
-
-await sock.sendMessage(gid,{
-text: reveal.text,
-mentions: reveal.mentions
-});
-
-m.endGame(gid);
-return;
-
-}
-
-// ===== NEXT NIGHT =====
-g.phase="night";
-
-await sock.sendMessage(gid,{
-text:"🌙 Next Night Begins..."
-});
-
-gameLoop(sock,gid);
-
-}, m.VOTE);
-
-}, m.DISCUSS);
-
-}, m.NIGHT);
-
+      }), m.VOTE);
+    }), m.DISCUSS);
+  }), m.NIGHT);
 }

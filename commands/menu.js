@@ -11,9 +11,34 @@ const secure = require("../lib/small_lib");
 module.exports = async (sock, msg, from) => {
   try {
     // 📜 React to show bot received the command
-    await sock.sendMessage(from, { react: { text: "📜", key: msg.key } }).catch(() => {});
+    await sock.sendMessage(from, { react: { text: "📜", key: msg.key } }).catch(() => { });
   } catch (e) {
     console.log("Reaction failed:", e?.message || e);
+  }
+
+  // 🚀 Loading Animation
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  try {
+    const frames = [
+      "💠 *𝗔𝗭𝗔𝗛𝗥𝗔𝗕𝗢𝗧* [▱▱▱▱▱▱▱▱▱▱] 0%",
+      "💠 *𝗔𝗭𝗔𝗛𝗥𝗔𝗕𝗢𝗧* [▰▰▱▱▱▱▱▱▱▱] 20%",
+      "💠 *𝗔𝗭𝗔𝗛𝗥𝗔𝗕𝗢𝗧* [▰▰▰▰▱▱▱▱▱▱] 40%",
+      "💠 *𝗔𝗭𝗔𝗛𝗥𝗔𝗕𝗢𝗧* [▰▰▰▰▰▰▱▱▱▱] 60%",
+      "💠 *𝗔𝗭𝗔𝗛𝗥𝗔𝗕𝗢𝗧* [▰▰▰▰▰▰▰▰▱▱] 80%",
+      "💠 *𝗔𝗭𝗔𝗛𝗥𝗔𝗕𝗢𝗧* [▰▰▰▰▰▰▰▰▰▰] 100%",
+      "✅ *𝗔𝗭𝗔𝗛𝗥𝗔𝗕𝗢𝗧 𝗜𝗦 𝗛𝗘𝗥𝗘!*"
+    ];
+
+    let loadMsg = await sock.sendMessage(from, { text: frames[0] }, { quoted: msg });
+
+    for (let i = 1; i < frames.length; i++) {
+      await delay(500);
+      await sock.sendMessage(from, { text: frames[i], edit: loadMsg.key });
+    }
+
+    await delay(200); // Tiny pause before blasting the menu
+  } catch (err) {
+    console.log("Loading animation error:", err?.message || err);
   }
 
   // 🧠 Ensure /data folder exists
