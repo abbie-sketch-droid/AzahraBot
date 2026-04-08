@@ -52,7 +52,7 @@ module.exports = async (sock, msg, from, text, args) => {
 
   try {
     // 🤖 React instantly
-    await sock.sendMessage(from, { react: { text: "🤖", key: msg.key } }).catch(() => {});
+    await sock.sendMessage(from, { react: { text: "🤖", key: msg.key } }).catch(() => { });
 
     // 🧠 Prepare memory for current chat
     if (!chatMemory[from]) chatMemory[from] = [];
@@ -63,17 +63,40 @@ module.exports = async (sock, msg, from, text, args) => {
     // Trim to last 10 exchanges max
     if (chatMemory[from].length > 10) chatMemory[from] = chatMemory[from].slice(-10);
 
-    // 🔗 Build API request
-    const endpoint = `https://generativelanguage.googleapis.com/v1/models/${modelName}:generateContent?key=${apiKey}`;
-    const response = await axios.post(endpoint, {
-      contents: chatMemory[from]
-    }, {
-      headers: { "Content-Type": "application/json" }
-    });
+    let result = null;
 
-    // 🧩 Parse model response
-    const result = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!result) throw new Error("Empty response from Gemini");
+    // 🥇 Primary: Native Gemini API
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1/models/${modelName}:generateContent?key=${apiKey}`;
+      const response = await axios.post(endpoint, {
+        contents: chatMemory[from]
+      }, {
+        headers: { "Content-Type": "application/json" }
+      });
+
+      result = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      if (result) console.log("✅ Response via Primary Gemini API");
+    } catch (err) {
+      console.error("⚠️ Primary Gemini API failed:", err.response?.data?.error?.message || err.message);
+    }
+
+    // 🥈 Fallback: PrinceTechn Gemini API
+    if (!result) {
+      try {
+        // Convert chat memory back to a prompt string since the fallback is a simple GET endpoint
+        const chatContext = chatMemory[from].map(m => `${m.role === 'user' ? 'User' : 'Model'}: ${m.parts?.[0]?.text || m.parts?.[0]}`).join("\n");
+        const fallbackUrl = `https://api.princetechn.com/api/ai/geminiaipro?apikey=prince&q=${encodeURIComponent(chatContext)}`;
+        
+        const fallbackResponse = await axios.get(fallbackUrl, { timeout: 30000 });
+        result = fallbackResponse.data?.result?.trim();
+        
+        if (result) console.log("✅ Response via PrinceTechn Gemini Fallback API");
+      } catch (err) {
+        console.error("⚠️ Gemini Fallback API failed:", err.message);
+      }
+    }
+
+    if (!result) throw new Error("All Gemini APIs failed to return a response.");
 
     // Store model reply to memory
     chatMemory[from].push({ role: "model", parts: [{ text: result }] });
@@ -85,6 +108,6 @@ module.exports = async (sock, msg, from, text, args) => {
   } catch (err) {
     const errorMsg = err.response?.data?.error?.message || err.message;
     console.error("❌ Gemini error:", err.response?.data || err.message);
-    await sock.sendMessage(from, { text: `⚠️ Gemini failed: ${errorMsg}` }, { quoted: msg });
+    await sock.sendMessage(from, { text: `⚠️ Gemini api error: ${errorMsg}` }, { quoted: msg });
   }
 };

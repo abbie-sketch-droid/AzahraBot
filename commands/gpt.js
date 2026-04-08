@@ -69,7 +69,10 @@ module.exports = async (sock, msg, from, text, args = []) => {
   if (chatMemory[from].length > 15)
     chatMemory[from].splice(0, chatMemory[from].length - 15);
 
+  let reply = null;
+
   try {
+    // 🥇 Primary: OpenRouter
     const res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -92,25 +95,53 @@ Always keep responses short, realistic, and remember chat history for this user.
         timeout: 45000,
       }
     );
+    reply = res.data?.choices?.[0]?.message?.content?.trim();
+    if (reply) console.log("✅ GPT Response via OpenRouter (Primary)");
+  } catch (err) {
+    console.error("⚠️ OpenRouter failed:", err.response?.data?.error?.message || err.message);
+  }
 
-    const reply = res.data?.choices?.[0]?.message?.content?.trim() || "😅 I couldn’t think of a reply.";
+  // 🥈 Fallback 1: EliteProTech
+  if (!reply) {
+    try {
+      // Build string prompt from memory to preserve context
+      const chatContext = chatMemory[from].map(m => `${m.role === 'user' ? 'User' : 'AzahraBot'}: ${m.content}`).join("\n");
+      const fullPrompt = `System: ${secure.botName || "AzahraBot"} — a friendly WhatsApp AI. Keep responses short.\n\nChat:\n${chatContext}`;
+      
+      const res = await axios.get(`https://eliteprotech-apis.zone.id/chatgpt?prompt=${encodeURIComponent(fullPrompt)}`, { timeout: 30000 });
+      reply = res.data?.response?.trim();
+      if (reply) console.log("✅ GPT Response via EliteProTech (Fallback 1)");
+    } catch (err) {
+      console.error("⚠️ EliteProTech fallback failed:", err.message);
+    }
+  }
+
+  // 🥉 Fallback 2: PrinceTechn
+  if (!reply) {
+    try {
+      const chatContext = chatMemory[from].map(m => `${m.role === 'user' ? 'User' : 'AzahraBot'}: ${m.content}`).join("\n");
+      const fullPrompt = `System: ${secure.botName || "AzahraBot"} — a friendly WhatsApp AI. Keep responses short.\n\nChat:\n${chatContext}`;
+      
+      const res = await axios.get(`https://api.princetechn.com/api/ai/gpt4o?apikey=prince&q=${encodeURIComponent(fullPrompt)}`, { timeout: 30000 });
+      reply = res.data?.result?.trim();
+      if (reply) console.log("✅ GPT Response via PrinceTechn (Fallback 2)");
+    } catch (err) {
+      console.error("⚠️ PrinceTechn fallback failed:", err.message);
+    }
+  }
+
+  try {
+    if (!reply) {
+      reply = "😅 I couldn’t think of a reply right now. All AI servers are currently busy.";
+    }
+
     chatMemory[from].push({ role: "assistant", content: reply });
-
-    // Save memory every message
-    saveMemory();
+    saveMemory(); // Save memory every message Update
 
     await sock.sendMessage(from, { text: reply }, { quoted: msg });
   } catch (err) {
-    console.error("❌ GPT Error:", err.response?.data || err.message);
-
-    let failMsg =
-      err.response?.status === 401
-        ? "⚠️ Invalid or expired API key."
-        : err.code === "ECONNABORTED"
-        ? "⏳ Request timed out — try again."
-        : "😕 AI servers are slow — try again soon.";
-
-    await sock.sendMessage(from, { text: failMsg }, { quoted: msg });
+    console.error("❌ Final GPT Error:", err.message);
+    await sock.sendMessage(from, { text: "😕 AI servers are completely down — try again later." }, { quoted: msg });
   } finally {
     await sock.sendPresenceUpdate("paused", from);
   }
